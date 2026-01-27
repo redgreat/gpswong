@@ -59,7 +59,7 @@ end
 
 --启动MQTT客户端任务
 sys.taskInit(function()
-
+    
     -- 默认都等到联网成功
     sys.waitUntil("IP_READY")
     sys.wait(1000)
@@ -82,7 +82,7 @@ sys.taskInit(function()
             -- log.info('imeia',imei)
 
             --_G.mqttc = mqtt.create(nil, mqtt_mqttHostUrl, mqtt_port, false, ca_file)
-            _G.mqttc = mqtt.create(nil, mqtt_mqttHostUrl, mqtt_port, false, ca_file)
+            _G.mqttc = mqtt.create(nil, mqtt_mqttHostUrl, mqtt_port, false)
 
             mqttc:auth(mqtt_mqttClientId,mqtt_username,mqtt_passwd,true)
             mqttc:keepalive(60) -- 默认值240s
