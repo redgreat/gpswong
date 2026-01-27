@@ -15,10 +15,6 @@ require "gnss"
 require "sleep"
 -- 电压检测
 require "vbat_adc"
--- FOTA升级
--- require "fota"
--- SHT30
--- require "SHT30"
 
 sys.taskInit(function()
     while 1 do

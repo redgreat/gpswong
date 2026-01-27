@@ -88,11 +88,8 @@ function autoDataStatus()
             end
         end
 
-        -- tjsondata["temperature"] = _G.temperature;
-        -- tjsondata["humidity"] = _G.humidity;
         tjsondata["vbat"]=  _G.vbat;
         tjsondata["electricity"]=  _G.electricity;
-        -- tjsondata["version"]= _G.version;
         tjsondata["data_from"] = _G.data_from;
         tjsondata["gprs"] = _G.Mobile_Ss;
         tjsondata["satellite"] = _G.Gnss_Ss;

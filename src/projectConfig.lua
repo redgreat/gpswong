@@ -3,11 +3,11 @@
 -- ③自建服务器(cloudwong)： 12个参数--必配--自行在自建服务器处理
 _G.SRCCID = mobile.imei()
 _G.mqtt_mqttClientId = mobile.imei()
-_G.mqtt_username = "aaa"
+_G.mqtt_username = "780eg"
 _G.mqtt_passwd = "REDACTED"
-_G.mqtt_mqttHostUrl = "ccc"
+_G.mqtt_mqttHostUrl = "fn.wongcw.cn"
 _G.mqtt_port = 1883
-_G.mqtt_pub_topic = "pub/780eg/" .. mobile.imei() .. "/data"
+_G.mqtt_pub_topic = "pos/780eg/" .. mobile.imei() .. "/data"
 _G.mqtt_sub_topic = "sub/780eg/" .. mobile.imei() .. "/cmd"
 
 ------------------------------以上必配，到此结束--------------------------------------
@@ -32,8 +32,8 @@ _G.cmd_ext = "";
 -- 数据上报周期--默认的10S上报:10*1000ms
 _G.update_time = 10*1000
 
--- 深度休眠唤醒周期 1分钟
-_G.deeprest_time = 1*60*1000
+-- 深度休眠唤醒周期 3分钟
+_G.deeprest_time = 3*60*1000
 
 -- 消息传输模板
 _G.REPORT_DATA_TEMPLATE = "{\"reporttime\":\"\"}"
@@ -43,10 +43,6 @@ _G.REPORT_CONTROLLACK_TEMPLATE = "{\"status\":\"success\",\"cmdtype\":\"cmd_cont
 _G.old_latitude=""
 _G.old_longitude=""
 _G.data_from=""
-
--- 默认的温湿度
-_G.temperature=0
-_G.humidity=0
 
 -- 电量
 _G.electricity = "--";
