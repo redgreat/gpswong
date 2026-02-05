@@ -1,6 +1,6 @@
 -- LuaTools需要PROJECT和VERSION这两个信息
 PROJECT = "gpswong"
-VERSION = "0.9.5.20250512"
+VERSION = "0.0.1.20260205"
 
 -- sys库是标配
 _G.sys = require("sys")
