@@ -1,0 +1,56 @@
+local imei = mobile.imei()
+
+return {
+    device_id = imei,
+    mqtt = {
+        host = "xxx",
+        port = 8883,
+        tls = true,
+        username = "xxx",
+        password = "xxx",
+        client_id = "gpswong-" .. imei,
+        topic = "gpswong/" .. imei .. "/data",
+        alarm_topic = "gpswong/" .. imei .. "/alarm",
+        keepalive_sec = 60,
+        reconnect_sec = 5,
+    },
+    gnss = {
+        uart_id = 2,
+        baudrate = 115200,
+        sample_interval_sec = 1, -- 1Hz：每秒生成一个有效定位点
+        require_fix = true,
+    },
+    motion = {
+        enabled = true,
+        mode = 2, -- DA221: 1=2g轻微震动，2=4g运动，3=8g高动态
+        interrupt_pin = gpio.WAKEUP2,
+        only_when_moving = true,
+        moving_hold_sec = 180,       -- 最后一次震动后继续采集 3 分钟
+        boot_active_sec = 300,       -- 开机先采集 5 分钟，确保获得首个位置
+        stationary_heartbeat_sec = 300, -- 静止时每 5 分钟保留一个定位点
+        alarm_min_interval_sec = 10,
+    },
+    light_alarm = {
+        enabled = true,              -- 仅 Air8202G 打开；Air8202C 请设 false
+        pin = gpio.WAKEUP3,          -- GPIO20，暗=高、见光/拆壳=低
+        tamper_level = 0,
+        debounce_ms = 500,
+    },
+    upload = {
+        batch_points = 10,       -- 集齐 10 点立即发一包
+        max_wait_sec = 15,       -- 不足 10 点时，最老点满 15 秒也发
+        offline_hours = 8,       -- Flash 离线轨迹上限；1Hz 时为 28,800 点
+        spool_path = "/gpswong_points.bin",
+    },
+    board = {
+        status_led_pin = 26,
+        status_led_active = 1,
+        hardware_wdt_pin = 24,
+        hardware_wdt_feed_sec = 180,
+    },
+    sim = {
+        -- Air8202 内置贴片卡接在第二卡槽。通用 Air780EGG CORE 默认不会替
+        -- Air8202 选择该卡槽，必须在任何联网任务启动前显式切换。
+        slot = 1,
+    },
+}
