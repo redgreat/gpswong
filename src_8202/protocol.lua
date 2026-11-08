@@ -44,7 +44,8 @@ function protocol.encode_spool(point)
         clamp((tonumber(point.lat) or 0) * 1e7, -2147483648, 2147483647),
         clamp((tonumber(point.lng) or 0) * 1e7, -2147483648, 2147483647),
         clamp(speed_kmh * 100, 0, 65535),
-        clamp((tonumber(point.course) or 0) * 100, 0, 65535),
+        -- 航向 0xFFFF 作为基站回落点的哨兵（真实航向上限 35999），回放时还原为 fix_type=0。
+        point.source == "lbs" and 0xFFFF or clamp((tonumber(point.course) or 0) * 100, 0, 65535),
         clamp((tonumber(point.gforce_x) or 0) * 1000, -32768, 32767),
         clamp((tonumber(point.gforce_y) or 0) * 1000, -32768, 32767),
         clamp((tonumber(point.gforce_z) or 0) * 1000, -32768, 32767))
@@ -54,14 +55,15 @@ function protocol.spool_to_record(data, vbat_mv)
     local epoch, lat, lng, speed100, course100, gx, gy, gz =
         string.unpack("<I4i4i4I2I2i2i2i2", data)
     local dt = os.date("!*t", epoch)
+    local lbs_point = course100 == 0xFFFF
     return protocol.encode_record({
         itow = (dt.hour * 3600 + dt.min * 60 + dt.sec) * 1000,
         year=dt.year, month=dt.month, day=dt.day,
         hour=dt.hour, min=dt.min, sec=dt.sec,
         lat=lat / 1e7, lng=lng / 1e7,
         speed_knots=(speed100 / 100) / 1.852,
-        course=course100 / 100,
-        fix_type=3, satellites=0, altitude=0, hdop=0, pdop=0,
+        course=lbs_point and 0 or course100 / 100,
+        fix_type=lbs_point and 0 or 3, satellites=0, altitude=0, hdop=0, pdop=0,
         gforce_x=gx / 1000, gforce_y=gy / 1000, gforce_z=gz / 1000,
     }, vbat_mv)
 end
@@ -107,7 +109,9 @@ function protocol.encode_records(records, device_id)
     local first, last = record_time(records[1]), record_time(records[#records])
     local name = string.format("8202_%s_%s_%s", device_id, utc_name(first), utc_name(last))
     assert(#name <= 255, "file name too long")
-    local duration = math.max(0, #records - 1) * cfg.gnss.sample_interval_sec
+    -- 采样周期以后可能调成 0.2（5Hz），string.pack("<I4") 只接受整数，
+    -- 浮点会直接抛错让整包发不出去。这里取整；子秒级的时长对回放没有意义。
+    local duration = math.floor(math.max(0, #records - 1) * cfg.gnss.sample_interval_sec)
     local body = "RB" .. string.pack("<BBB", 1, 1, #name) .. name
         .. string.pack("<I4I2", duration, #records) .. table.concat(records)
     return body .. string.pack("<I2", crc16_ccitt(body)), name

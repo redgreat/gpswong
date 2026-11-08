@@ -1,249 +1,127 @@
-PROJECT = "gnss"
-VERSION = "1.0.0"
+-- GNSS 采样（1Hz）：只上传有效定位点，驱动运动判定与 GNSS 失锁预警。
+-- GNSS 长时间无定位（地下车库等）时，用基站定位补一个大致点，标记 source="lbs"。
+local cfg = require("config")
+local motion = require("motion")
+local lbs = require("lbs")
+local gnss = { latest = nil }
+local last_stationary_point_ms = -100000000
+local last_fix_ms = mcu.ticks()
+local last_lbs_ms = -100000000
+local lost_alerted = false
+local lbs_busy = false
 
--- sys库是标配
-local lbsLoc = require("lbsLoc")
-local lbsLoc2 = require("lbsLoc2")
-local sys = require("sys")
-require("sysplus")
+local function snapshot()
+    if not libgnss.isFix() then return nil end
+    local rmc = libgnss.getRmc(2)
+    local gga = libgnss.getGga(2) or {}
+    local gsa_all = libgnss.getGsa() or {}
+    if not rmc or not rmc.valid or not rmc.lat or not rmc.lng then return nil end
 
--- GPS定位失败次数，超过10次就LBS定位
-local Gps_Get_Num=0
-local Gnss_HistoricalNum=0
-local Wifi_Num=0
-local Wifi_Num_Max=0
-local gps_uart_id = 2     --780eg 
-local mqttc = nil
-local lla = {
-    lat,
-    lng
-}
+    local gsa = gsa_all[1] or gsa_all
+    local speed_knots = rmc.speed or 0
+    motion.update(speed_knots * 1.852)
+    return {
+        -- iTOW 在此实时点协议中只用于同秒排序；UTC 毫秒可稳定满足该用途。
+        itow = ((rmc.hour or 0) * 3600 + (rmc.min or 0) * 60 + (rmc.sec or 0)) * 1000,
+        year = rmc.year, month = rmc.month, day = rmc.day,
+        hour = rmc.hour, min = rmc.min, sec = rmc.sec,
+        -- geofence.lua 直接订阅 GPSWONG_POINT，要求 lat/lng 一定是数值。
+        lat = tonumber(rmc.lat), lng = tonumber(rmc.lng),
+        speed_knots = speed_knots,
+        course = rmc.course or 0,
+        altitude = gga.altitude or 0,
+        hdop = gga.hdop or 0,
+        pdop = gsa.pdop or 0,
+        satellites = gga.satellites_tracked or 0,
+        fix_type = (gsa.fix_type and gsa.fix_type >= 2) and gsa.fix_type or 3,
+        source = "gnss",
+    }
+end
 
-libgnss.clear()
-uart.setup(gps_uart_id, 115200)
-
-function exec_agnss()
-    if http then
-        -- AGNSS 已调通
-        while 1 do
-            local code, headers, body = http.request("GET", "http://download.openluat.com/9501-xingli/CASIC_data.dat").wait()
-
-            if code == 200 and body and #body > 1024 then
-
-                for offset=1,#body,512 do
-                    uart.write(gps_uart_id, body:sub(offset, offset + 511))
-                    sys.wait(100)
-                end
-
-                io.writeFile("/6228.bin", body)
-                break
-            end
-            sys.wait(60*1000)
-        end
-    end
-    sys.wait(20)
-
-    local str = io.readFile("/gnssrmc")
-    if str then
-        local dt = os.date("!*t")
-        lla = json.decode(str)
-        local aid = libgnss.casic_aid(dt, lla)
-        uart.write(gps_uart_id, aid.."\r\n")
-        str = nil
-    else
-        log.info("---------------->STR_nil")
+local function init_chip()
+    for _, cmd in ipairs(cfg.gnss.init_cmds or {}) do
+        uart.write(cfg.gnss.uart_id, cmd)
+        sys.wait(20)
     end
 end
 
-local function getLocCb(result, lat, lng, addr, time, locType)
-    -- 获取经纬度成功
-    if result == 0 then
-        if locType == 0 then
-            log.info("------------>基站定位成功",lat,lng)
-            _G.data_from="LBS"
-        elseif locType == 255 then
-            log.info("------------>wifi定位成功",lat,lng)
-            _G.data_from="Wifi"
-        else
-            _G.data_from="NoData"
-            log.info("------------>wifi和基站定位失败",lat,lng)
-        end
-        _G.old_longitude=lng
-        _G.old_latitude=lat
-
-        if devicemodel ~= 'awake_normal' then
-            sys.publish("GPS_GET_SUCCESS")
-        end
-    else
-        log.info("------------>混合定位失败")
-    end
+-- 基站回落点：速度和航向置 0，fix_type=0 表示非 GNSS 定位。时间取 NTP 校准后的 UTC。
+local function lbs_fix(moving)
+    lbs_busy = true
+    local lat, lng = lbs.locate()
+    lbs_busy = false
+    if not lat then return end
+    local utc = os.date("!*t", os.time())
+    if utc.year < 2020 then return end
+    if not moving then last_stationary_point_ms = mcu.ticks() end
+    log.info("gnss", "lbs point", lat, lng, moving and "moving" or "stationary")
+    sys.publish("GPSWONG_POINT", {
+        itow = (utc.hour * 3600 + utc.min * 60 + utc.sec) * 1000,
+        year = utc.year, month = utc.month, day = utc.day,
+        hour = utc.hour, min = utc.min, sec = utc.sec,
+        lat = lat, lng = lng,
+        speed_knots = 0, course = 0, altitude = 0, hdop = 0, pdop = 0,
+        satellites = 0, fix_type = 0,
+        source = "lbs", moving = moving,
+    })
 end
 
-sys.subscribe("WLAN_SCAN_DONE", function ()
-    local results = wlan.scanResult()
-    log.info("-----------------#results>",#results)
-    log.info("scan", "results", #results)
-    if #results > 0 then
-        local reqWifi = {}
-        for k,v in pairs(results) do
-            log.info("scan", v["ssid"], v["rssi"], v["bssid"]:toHex())
-            local bssid = v["bssid"]:toHex()
-            bssid = string.format ("%s:%s:%s:%s:%s:%s", bssid:sub(1,2), bssid:sub(3,4), bssid:sub(5,6), bssid:sub(7,8), bssid:sub(9,10), bssid:sub(11,12))
-            reqWifi[bssid]=v["rssi"]
-        end
-        lbsLoc.request(getLocCb,nil,nil,nil,nil,nil,nil,reqWifi)
+function gnss.start()
+    pm.power(pm.GPS, true)
+    libgnss.clear()
+    uart.setup(cfg.gnss.uart_id, cfg.gnss.baudrate)
+    if cfg.gnss.uart_forward then
+        uart.setup(cfg.gnss.uart_forward, cfg.gnss.baudrate)
+        libgnss.bind(cfg.gnss.uart_id, cfg.gnss.uart_forward)
     else
-        Wifi_Num=Wifi_Num+1
-        log.info("------------>Wifi_Num",Wifi_Num)
-        if Wifi_Num>=Wifi_Num_Max then
-            Wifi_Num=0
-            log.info("------------>wifi扫描失败,改用基站定位")
-            lbsLoc.request(getLocCb) -- 没有wifi数据,进行普通定位
-        end
+        libgnss.bind(cfg.gnss.uart_id)
     end
-end)
+    sys.taskInit(init_chip)
 
-sys.taskInit(function()
-    while true do
-        if  not (devicemodel == "" and cmd_ext == '') then
-            break;
+    sys.subscribe("GNSS_STATE", function(event)
+        local on = event == "FIXED"
+        if cfg.board.status_led_pin then
+            gpio.set(cfg.board.status_led_pin,
+                on and cfg.board.status_led_active or (1 - cfg.board.status_led_active))
         end
-        sys.wait(100)
-    end
-    while true do
-        if  not (devicemodel == "restdeep_platequery" and cmd_ext == 'no') then
-            break;
-        end
-        sys.wait(100)
-    end
-
-    -- Air780EG工程样品的GPS的默认波特率是9600, 量产版是115200,以下是临时代码
-    log.info("GPS", "start")
-
-    --pm.power(pm.GPS, true)
-    -- 绑定uart,底层自动处理GNSS数据
-    -- 第二个参数是转发到虚拟UART, 方便上位机分析
-    --uart.write(gps_uart_id, "$PCAS04,2*1B\r\n")
-    --sys.wait(100)
-    libgnss.bind(gps_uart_id, uart.VUART_0)
-    libgnss.on("raw", function(data)
+        if on then gnss.latest = snapshot() end
+        log.info("gnss", event, gnss.latest and json.encode(gnss.latest) or "no-fix")
     end)
-    sys.wait(200) -- GPNSS芯片启动需要时间
-    -- 增加显示的语句
-    sys.wait(200) -- GPNSS芯片启动需要时间,大概150ms
-    uart.write(gps_uart_id,_G.PositioningMode)
-    sys.wait(20)
-    uart.write(gps_uart_id, "$PCAS03,1,1,1,1,1,1,1,1,0,0,1,1,1*33\r\n") -- 默认所有name语句都打开
-    sys.wait(20)
-    exec_agnss()
-end)
 
-sys.taskInit(function()
-    while true do
-        if  not (devicemodel == "" and cmd_ext == '') then
-            break;
-        end
-        sys.wait(100)
-    end
-    while true do
-        if  not (devicemodel == "restdeep_platequery" and cmd_ext == 'no') then
-            break;
-        end
-        sys.wait(100)
-    end
-    pm.power(pm.GPS, true)   --780EG打开  EP注释掉
-    while 1 do
-        sys.wait(1000)
-        ----------------------------------------------------------------------------
-        local rsrp=mobile.rsrp()
-        local RsrpGrade=rsrp+140 
-        _G.Mobile_Ss=RsrpGrade
-        -- log.info("------------>_G.Mobile_Ss",_G.Mobile_Ss)
-        local Gsv=libgnss.getGsv()
-        local Gsvv=json.encode(Gsv)
-        local loc=libgnss.getRmc(1)
-        locc=json.encode(loc)--其他文件要调用的量不要加local!!!
-        libgnss.getIntLocation()
-        local gga = libgnss.getGga(2)
-        if gga then
-            -- log.info("GGA------------------>", json.encode(gga, "11g"))
-        end
-        local gll = libgnss.getGll(2)
-        if gll then
-            -- log.info("GLL----------------->", json.encode(gll, "11g"))
-        end
-        if loc.valid==true then
-            Gps_Get_Num = 0
-            local lat=loc.lat
-            local lng=loc.lng
-            local latt=lat/10000000 --除法，保留小数
-            local lngg=lng/10000000
-            _G.old_latitude=json.encode(latt)
-            _G.old_longitude =json.encode(lngg)
-            log.info("-------------------->> GPS定位成功！！！<<----------------------","lat------->",_G.old_latitude,"lng------->",_G.old_longitude)
-            _G.data_from="GPS"
-            sys.publish(_G.GPS_Ggt_Topic)
-
-            local total_sats=Gsv.total_sats
-            local sats=Gsv.sats
-            local snr=nil
-            local LsnrNum=0
-
-            for i=1,total_sats do
-                snr=sats[i].snr
-                if snr>25 then 
-                    LsnrNum=LsnrNum+1
-                end
+    sys.timerLoopStart(function()
+        local now = mcu.ticks()
+        local point = snapshot()
+        if not point then
+            if not lost_alerted and cfg.gnss.lost_fix_alarm_sec > 0
+                and now - last_fix_ms >= cfg.gnss.lost_fix_alarm_sec * 1000 then
+                lost_alerted = true
+                sys.publish("GPSWONG_ALERT", {type = "gnss_lost", severity = "warning",
+                    value = math.floor((now - last_fix_ms) / 1000)})
             end
-            
-            _G.Gnss_Ss=LsnrNum
-            _G.SatsNum=total_sats
-        elseif loc.valid==false then
-            sys.publish(_G.GPS_Ggt_Topic_F)
-            Gps_Get_Num=Gps_Get_Num+1
-            log.info(Gps_Get_Num,"-------------------->>GPS定位失败<<----------------------原始数据:",locc) 
+            local moving = motion.is_moving()
+            if cfg.lbs.enabled and not lbs_busy
+                and now - last_fix_ms >= cfg.lbs.after_no_fix_sec * 1000
+                and now - last_lbs_ms >= cfg.lbs.interval_sec * 1000
+                and (moving or now - last_stationary_point_ms >= cfg.motion.stationary_heartbeat_sec * 1000) then
+                last_lbs_ms = now
+                sys.taskInit(function() lbs_fix(moving) end)
+            end
+            return
         end
-
-        if Gps_Get_Num==10 then
-            Gps_Get_Num=0
-            log.info("-------------------->>10次 GPS定位失败,改用基站wifi混合定位!!!<<----------------------") 
-            mobile.reqCellInfo(15)
-            lbsLoc.request(getLocCb) -- 没有wifi数据,进行普通定位
-            -- wlan.init()
-            -- for i=1,Wifi_Num_Max do
-            --     mobile.reqCellInfo(6)
-            --     sys.waitUntil("CELL_INFO_UPDATE", 3000)
-            --     wlan.scan()
-            --     sys.wait(6000)
-            -- end
+        last_fix_ms = now
+        if lost_alerted then
+            lost_alerted = false
+            sys.publish("GPSWONG_ALERT", {type = "gnss_recovered", severity = "info", value = 1})
         end
-    end
-end)
-
--- 订阅GNSS状态编码
-sys.subscribe("GNSS_STATE", function(event, ticks)
-    -- event取值有 
-    -- FIXED 定位成功
-    -- LOSE  定位丢失
-    -- ticks是事件发生的时间,一般可以忽略
-    log.info("gnss", "state", event, ticks)
-    if event == "FIXED" then
-        local rmc = libgnss.getRmc(2)
-        local locStr = { lat ,lng }
-        locStr.lat = rmc.lat
-        locStr.lng = rmc.lng
-        local str = json.encode(locStr, "7f")
-        io.writeFile("/gnssrmc", str)
-        log.info("gnss", "rmc", str)
-    end
-end)
-
-sys.taskInit(function()
-    while 1 do
-        sys.wait(3600*1000) -- 一小时检查一次
-        local fixed, time_fixed = libgnss.isFix()
-        if not fixed then
-            exec_agnss()
+        local moving = motion.is_moving()
+        if not moving and now - last_stationary_point_ms < cfg.motion.stationary_heartbeat_sec * 1000 then
+            return
         end
-    end
-end)
+        point.moving = moving
+        gnss.latest = point
+        sys.publish("GPSWONG_POINT", point)
+        if not moving then last_stationary_point_ms = now end
+    end, cfg.gnss.sample_interval_sec * 1000)
+end
+
+return gnss

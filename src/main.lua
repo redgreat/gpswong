@@ -1,86 +1,27 @@
 -- LuaTools需要PROJECT和VERSION这两个信息
-PROJECT = "GpsWong"
-VERSION = "1.0.0"
+PROJECT = "gpswong_src"
+VERSION = "0.4.0"
 
 _G.sys = require("sys")
-_G.sysplus = require("sysplus")
-require"projectConfig"
+require("sysplus")
 
--- 电量检测
-require "vbat_adc"
+local cfg = require("config")
+log.info("main", PROJECT, VERSION, rtos.bsp(), hmeta and hmeta.model() or "")
 
-sys.taskInit(function()
-    -- 等待网络就绪
-    sys.waitUntil("IP_READY")
-    sys.wait(1000)
+fskv.init()
+if cfg.board.adc_range_3_8 and adc.setRange then adc.setRange(adc.ADC_RANGE_3_8) end
+adc.open(adc.CH_VBAT)
 
-    -- 连接 MQTT
-    local mqttc = mqtt.create(nil, MQTT_HOST, MQTT_PORT, false)
-    mqttc:auth(MQTT_CLIENTID, MQTT_USER, MQTT_PASS, true)
-    mqttc:keepalive(60)
-    mqttc:autoreconn(true, 6000)
-    mqttc:on(function(client, event)
-        if event == "conack" then sys.publish("MQTT_READY") end
-    end)
-    mqttc:connect()
-    sys.waitUntil("MQTT_READY")
+if cfg.board.status_led_pin then
+    gpio.setup(cfg.board.status_led_pin, cfg.board.status_led_active)
+end
 
-    -- 上电并绑定 GNSS
-    if pm and pm.power then pm.power(pm.GPS, true) end
-    libgnss.bind(_G.uartid or 1, uart.VUART_0)
-    sys.wait(200)
+if wdt then
+    wdt.init(cfg.board.wdt_init_sec * 1000)
+    sys.timerLoopStart(wdt.feed, cfg.board.wdt_feed_sec * 1000)
+end
 
-    -- 初始等待 AGNSS
-    sys.wait(15000)
-
-    local gpscount = 0
-    local lastlbs  = os.time()
-
-    while true do
-        local d = {
-            timestamp = os.time(),
-            csq       = mobile.csq(),
-            volt      = (_G.vbat or 0) / 1000,
-            acc       = 0
-        }
-
-        -- GNSS
-        if libgnss.isFix() then
-            local tg = libgnss.getRmc(2)
-            d.gps = {
-                lat = tg.lat,
-                lng = tg.lng,
-                spd = tg.speed,
-                dir = tg.variation
-            }
-            gpscount = 0
-        else
-            gpscount = gpscount + 1
-            if gpscount > gpsrestart then sys.reboot() end
-        end
-
-        -- LBS 回落
-        if not d.gps and os.time() >= lastlbs + lbstime then
-            local done, lat, lng = false
-            lbsLoc.request(function(res, _lat, _lng)
-                if res == 0 then lat, lng = _lat, _lng end
-                done = true
-            end)
-            for _ = 1,50 do if done then break end; sys.wait(100) end
-            if lat and lng then
-                d.lbs = { lat = lat, lng = lng }
-                lastlbs = os.time()
-            end
-        end
-
-        -- 发布
-        mqttc:publish(MQTT_TOPIC, json.encode(d), 0)
-
-        sys.wait(cycletime)
-    end
-end)
-
--- 用户代码已结束---------------------------------------------
--- 结尾总是这一句
+require("mqtt_upload").start()
+require("alerts").start()
+require("gnss").start()
 sys.run()
--- sys.run()之后后面不要加任何语句!!!!!

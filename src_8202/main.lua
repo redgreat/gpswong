@@ -1,5 +1,5 @@
 PROJECT = "gpswong_8202"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 _G.sys = require("sys")
 require("sysplus")
@@ -15,6 +15,16 @@ log.info("main", "select embedded SIM slot", cfg.sim.slot, sim_ok, sim_err or ""
 -- 绿灯 GPIO26：先点亮作为脚本成功启动标志，后续由 GNSS 状态接管。
 gpio.setup(cfg.board.status_led_pin, cfg.board.status_led_active)
 adc.open(adc.CH_VBAT)
+-- ADC 光敏需要外接光敏电阻，默认关闭；打开失败不能影响主流程。
+local light_cfg = cfg.light_alarm or {}
+if light_cfg.adc_enabled then
+    local ok, err = pcall(adc.open, tonumber(light_cfg.adc_id) or 3)
+    if ok then
+        log.info("main", "light ADC opened", light_cfg.adc_id or 3)
+    else
+        log.warn("main", "light ADC open failed", err or "")
+    end
+end
 
 -- 内部看门狗防 Lua 任务死锁；Air8202 板载 Air153C 则优先交给官方扩展库。
 if wdt then

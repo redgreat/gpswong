@@ -17,7 +17,9 @@ local function snapshot()
         itow = ((rmc.hour or 0) * 3600 + (rmc.min or 0) * 60 + (rmc.sec or 0)) * 1000,
         year = rmc.year, month = rmc.month, day = rmc.day,
         hour = rmc.hour, min = rmc.min, sec = rmc.sec,
-        lat = rmc.lat, lng = rmc.lng,
+        -- geofence.lua 直接订阅 GPSWONG_POINT，要求 lat/lng 一定是数值；
+        -- 个别固件版本 libgnss 会返回字符串，这里统一转成 number。
+        lat = tonumber(rmc.lat), lng = tonumber(rmc.lng),
         speed_knots = rmc.speed or 0,
         course = rmc.course or 0,
         altitude = gga.altitude or 0,

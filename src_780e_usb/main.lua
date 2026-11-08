@@ -1,30 +1,27 @@
 -- LuaTools需要PROJECT和VERSION这两个信息
-PROJECT = "gpswong"
-VERSION = "0.0.1.20260205"
+PROJECT = "gpswong_780eg"
+VERSION = "0.4.0"
 
--- sys库是标配
 _G.sys = require("sys")
 require("sysplus")
 
-log.info("main", PROJECT, VERSION)
--- 初始化存储
-fskv.init()
-fskv.set("version",VERSION) --记录版本号放在fskv中，通过它传递给config.lua，否则config.lua引用main.lua取值会造成循环引用
-
 local cfg = require("config")
-log.info("config", json.encode(cfg))
+log.info("main", PROJECT, VERSION, rtos.bsp(), hmeta and hmeta.model() or "")
 
-if wdt then
-    --添加硬狗防止程序卡死，在支持的设备上启用这个功能
-    wdt.init(cfg.wdt.init_wait*1000) --初始化watchdog设置
-    sys.timerLoopStart(wdt.feed, cfg.wdt.feed_interval*1000) --多久喂一次狗
+fskv.init()
+if cfg.board.adc_range_3_8 and adc.setRange then adc.setRange(adc.ADC_RANGE_3_8) end
+adc.open(adc.CH_VBAT)
+
+if cfg.board.status_led_pin then
+    gpio.setup(cfg.board.status_led_pin, cfg.board.status_led_active)
 end
 
-_G.gps_uart_id = cfg.gnss.uart_id
+if wdt then
+    wdt.init(cfg.board.wdt_init_sec * 1000)
+    sys.timerLoopStart(wdt.feed, cfg.board.wdt_feed_sec * 1000)
+end
 
-require "myMQTT"
-
--- 用户代码已结束---------------------------------------------
--- 结尾总是这一句
+require("mqtt_upload").start()
+require("alerts").start()
+require("gnss").start()
 sys.run()
--- sys.run()之后后面不要加任何语句!!!!!

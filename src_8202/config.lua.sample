@@ -9,8 +9,9 @@ return {
         username = "xxx",
         password = "xxx",
         client_id = "gpswong-" .. imei,
-        topic = "gpswong/" .. imei .. "/data",
-        alarm_topic = "gpswong/" .. imei .. "/alarm",
+        topic = "gpswong/" .. imei .. "/data",       -- 上行：80B simlive_rb，格式永远不动
+        alarm_topic = "gpswong/" .. imei .. "/alarm", -- 上行：实时预警 JSON
+        cmd_topic = "gpswong/" .. imei .. "/cmd",     -- 下行：远程下发围栏 / 阈值
         keepalive_sec = 60,
         reconnect_sec = 5,
     },
@@ -19,6 +20,15 @@ return {
         baudrate = 115200,
         sample_interval_sec = 1, -- 1Hz：每秒生成一个有效定位点
         require_fix = true,
+        -- 提到 5Hz（0.2s）必须同时做三件事，缺一不可：
+        --   1) 提高 baudrate 并确认 GNSS 芯片能承受；
+        --   2) 向 CASIC 芯片写倍频指令（参考官方 demo/gps/Air820/自适应/autoGPS.lua
+        --      里的 $PCAS06,0* 系列指令，uart.write 发送）；
+        --   3) gnss.lua 定时器改成 200ms，并给 itow 补亚秒序号（同秒内 5 点会重复）。
+        -- 另外 upload.offline_hours 必须同步下调：5Hz 下 8 小时约 144000 点
+        -- ≈ 3.17MB，远超 Air780EGG 约 800KB 的用户文件系统，会把 Flash 写满。
+        -- protocol.lua 的 duration 已做 math.floor，不会再因浮点让 string.pack 报错。
+        -- 通勤用 1Hz 已经够算里程/时长，默认保持 1Hz。
     },
     motion = {
         enabled = true,
@@ -35,7 +45,42 @@ return {
         pin = gpio.WAKEUP3,          -- GPIO20，暗=高、见光/拆壳=低
         tamper_level = 0,
         debounce_ms = 500,
+        -- ADC 模拟光敏：Air8202C 没有焊光敏电阻，默认必须关。
+        -- 要启用需外接 GM5528 + 10K 分压到 ADC3，再按实际接线标定阈值；
+        -- 比较的是 ADC 电压 mV，不是真实 lux，请勿当作照度值使用。
+        adc_enabled = false,
+        adc_id = 3,
+        adc_threshold_mv = 1500,     -- 高于此值判定「见光/拆壳」
+        hysteresis_mv = 150,         -- 回差，避免临界点反复触发
+        adc_sample_sec = 10,
     },
+    -- 设备侧地理围栏。fences 也可留空，改由 MQTT 下行 set_fences 远程下发，
+    -- 这样调整围栏不用重新烧录。坐标是 WGS84，与上报点一致。
+    geofence = {
+        enabled = true,
+        debounce_n = 2,              -- 连续 2 次同向判定才确认进出，挡住边界漂移
+        fences_key = "gpswong_fences",
+        state_key = "gpswong_fence_state",
+        fences = {
+            -- 示例：家 / 公司各一个圆形围栏（占位坐标，请用真实坐标替换）
+            -- { id = "home", name = "家", shape = "circle",
+            --   lat = 36.0671, lng = 120.3826, radius_m = 300,
+            --   enter_alert = true, exit_alert = true },
+            -- 多边形示例：points = {{lat=...,lng=...}, ...}, shape = "polygon"
+        },
+    },
+    -- 电量预警：滞回三档，只有档位翻转才发事件，状态存 fskv 防重启重复报警。
+    battery_alarm = {
+        enabled = true,
+        sample_sec = 60,
+        critical_mv = 3400,          -- 低于此值：critical
+        low_mv = 3600,               -- 低于此值：warning
+        recover_mv = 3750,           -- 必须回到此值以上才恢复正常（滞回带）
+        charging_events = true,      -- misc.getVbus() 可用时上报充电开始/结束（info）
+    },
+    -- 预留：trip_id / seq 随点上报。当前服务端按 80B 定长解析，
+    -- 启用前需要先给 emqx_pg_ingest 加新 codec，保持关闭。
+    trip = { enabled = false },
     upload = {
         batch_points = 10,       -- 集齐 10 点立即发一包
         max_wait_sec = 15,       -- 不足 10 点时，最老点满 15 秒也发

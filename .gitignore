@@ -45,3 +45,5 @@ src/config.lua
 src/projectConfig.lua
 src/lbsLoc.lua
 src_780e_usb/config.lua
+
+src_780e_usb/payload.json
