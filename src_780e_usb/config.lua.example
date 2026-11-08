@@ -1,0 +1,87 @@
+-- 度云 Air780EG + USB 串口 GNSS 设备配置（LuatOS 底包 + gpswong 脚本）
+-- 凭据请在本地填写，勿把真实 host/账号/密码提交到仓库。
+local imei = mobile.imei()
+
+return {
+    device_id = imei,
+    mqtt = {
+        host = "xxx",
+        port = 1883,
+        tls = false,
+        username = "xxx",
+        password = "xxx",
+        client_id = "gpswong-" .. imei,
+        topic = "gpswong/" .. imei .. "/data",        -- 上行：80B simlive_rb，格式永远不动
+        alarm_topic = "gpswong/" .. imei .. "/alarm", -- 上行：实时预警 JSON
+        cmd_topic = "gpswong/" .. imei .. "/cmd",     -- 下行：远程下发围栏 / 规则
+        keepalive_sec = 60,
+        reconnect_sec = 5,
+    },
+    gnss = {
+        uart_id = 2,
+        baudrate = 115200,
+        uart_forward = uart.VUART_0,  -- GNSS 原始数据转发到 USB 虚拟串口；不需要时设为 nil
+        -- 上电后发给 GNSS 芯片的初始化指令：GPS+北斗+GLONASS，只开 GGA/GSA/RMC
+        init_cmds = {
+            "$CFGSYS,H101\r\n",
+            "$CFGNMEA,h51\r\n",
+            "$CFGMSG,0,0,1\r\n", -- GGA
+            "$CFGMSG,0,1,0\r\n", -- GLL
+            "$CFGMSG,0,2,1\r\n", -- GSA
+            "$CFGMSG,0,3,0\r\n", -- GSV
+            "$CFGMSG,0,4,1\r\n", -- RMC
+        },
+        sample_interval_sec = 1, -- 1Hz：每秒生成一个有效定位点
+        lost_fix_alarm_sec = 600, -- 连续无定位超过此时长发 gnss_lost；0 表示关闭
+    },
+    -- 基站回落：GNSS 连续无定位（地下车库等）时用基站给出大致位置，精度约百米到千米。
+    -- 只补轨迹点（fix_type=0），不驱动围栏。
+    lbs = {
+        enabled = true,
+        after_no_fix_sec = 60,  -- 连续无 GNSS 定位超过此时长才启用基站
+        interval_sec = 60,      -- 无定位期间基站查询的最小间隔
+        timeout_ms = 5000,
+    },
+    -- 无加速度计：用 GNSS 速度判断是否运动
+    motion = {
+        only_when_moving = true,
+        speed_kmh = 3,                  -- GNSS 速度 >= 此值视为运动
+        moving_hold_sec = 180,          -- 最后一次运动后继续 1Hz 采集 3 分钟
+        boot_active_sec = 300,          -- 开机先采集 5 分钟，确保获得首个位置
+        stationary_heartbeat_sec = 300, -- 静止时每 5 分钟保留一个定位点
+    },
+    upload = {
+        batch_points = 10,   -- 集齐 10 点立即发一包
+        max_wait_sec = 15,   -- 不足 10 点时，最老点满 15 秒也发
+        offline_hours = 8,   -- Flash 离线轨迹上限；1Hz 时为 28,800 点
+        spool_path = "/gpswong_points.bin",
+    },
+    board = {
+        status_led_pin = 24,      -- 定位状态指示灯；无灯的板子设为 nil
+        status_led_active = 1,
+        wdt_init_sec = 9,         -- 内部看门狗
+        wdt_feed_sec = 5,
+        adc_range_3_8 = true,     -- Air780E 的 VBAT 量程 0~3.8V
+    },
+    -- 设备侧地理围栏。fences 可留空，改由 MQTT 下行 set_fences 远程下发。坐标 WGS84。
+    geofence = {
+        enabled = true,
+        debounce_n = 2,
+        fences_key = "gpswong_fences",
+        state_key = "gpswong_fence_state",
+        fences = {
+            -- { id = "home", name = "家", shape = "circle",
+            --   lat = 36.0671, lng = 120.3826, radius_m = 300,
+            --   enter_alert = true, exit_alert = true },
+        },
+    },
+    -- 电量预警：滞回三档，只有档位翻转才发事件，状态存 fskv 防重启重复报警。
+    battery_alarm = {
+        enabled = true,
+        sample_sec = 60,
+        critical_mv = 3400,     -- 低于此值：critical
+        low_mv = 3600,          -- 低于此值：warning
+        recover_mv = 3750,      -- 回到此值以上才恢复正常（滞回带）
+        charging_events = true, -- misc.getVbus() 可用时上报充电开始/结束
+    },
+}

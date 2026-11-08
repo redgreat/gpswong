@@ -1,0 +1,75 @@
+-- 合宙官网 Air780EG 开发板（LuatOS 底包 + gpswong 脚本）配置
+-- 凭据请在本地填写，勿把真实 host/账号/密码提交到仓库。
+local imei = mobile.imei()
+
+return {
+    device_id = imei,
+    mqtt = {
+        host = "xxx",
+        port = 1883,
+        tls = false,
+        username = "xxx",
+        password = "xxx",
+        client_id = "gpswong-" .. imei,
+        topic = "gpswong/" .. imei .. "/data",        -- 上行：80B simlive_rb，格式永远不动
+        alarm_topic = "gpswong/" .. imei .. "/alarm", -- 上行：实时预警 JSON
+        cmd_topic = "gpswong/" .. imei .. "/cmd",     -- 下行：远程下发围栏 / 规则
+        keepalive_sec = 60,
+        reconnect_sec = 5,
+    },
+    gnss = {
+        uart_id = 1,              -- 原 projectConfig 中 _G.uartid = 1
+        baudrate = 115200,
+        uart_forward = uart.VUART_0,
+        -- CASIC 芯片：GPS+北斗双模
+        init_cmds = {
+            "$PCAS04,3*1A\r\n",
+        },
+        sample_interval_sec = 1,
+        lost_fix_alarm_sec = 600,
+    },
+    -- 基站回落：GNSS 连续无定位（地下车库等）时用基站给出大致位置，精度约百米到千米。
+    -- 只补轨迹点（fix_type=0），不驱动围栏。
+    lbs = {
+        enabled = true,
+        after_no_fix_sec = 60,
+        interval_sec = 60,
+        timeout_ms = 5000,
+    },
+    -- 无加速度计：用 GNSS 速度判断是否运动
+    motion = {
+        only_when_moving = true,
+        speed_kmh = 3,
+        moving_hold_sec = 180,
+        boot_active_sec = 300,
+        stationary_heartbeat_sec = 300,
+    },
+    upload = {
+        batch_points = 10,
+        max_wait_sec = 15,
+        offline_hours = 8,
+        spool_path = "/gpswong_points.bin",
+    },
+    board = {
+        status_led_pin = nil,     -- 未确认该板是否有定位指示灯
+        status_led_active = 1,
+        wdt_init_sec = 9,
+        wdt_feed_sec = 5,
+        adc_range_3_8 = false,    -- 保持原 src 工程的 ADC 设置
+    },
+    geofence = {
+        enabled = true,
+        debounce_n = 2,
+        fences_key = "gpswong_fences",
+        state_key = "gpswong_fence_state",
+        fences = {},
+    },
+    battery_alarm = {
+        enabled = true,
+        sample_sec = 60,
+        critical_mv = 3400,
+        low_mv = 3600,
+        recover_mv = 3750,
+        charging_events = true,
+    },
+}

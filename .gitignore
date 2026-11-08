@@ -40,3 +40,8 @@ luac.out
 *.hex
 resource/
 src_8202/config.lua
+src_8202/config.lua.pro
+src/config.lua
+src/projectConfig.lua
+src/lbsLoc.lua
+src_780e_usb/config.lua

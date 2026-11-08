@@ -4,7 +4,7 @@
 _G.SRCCID = mobile.imei()
 _G.mqtt_mqttClientId = mobile.imei()
 _G.mqtt_username = "780eg"
-_G.mqtt_passwd = "REDACTED"
+_G.mqtt_passwd = "xxx"
 _G.mqtt_mqttHostUrl = "fn.wongcw.cn"
 _G.mqtt_port = 1883
 _G.mqtt_pub_topic = "pos/780eg/" .. mobile.imei() .. "/data"
@@ -65,4 +65,4 @@ _G.GPS_Ggt_Topic_F="GPS_Get_F"
 _G.Updata_OK="Updata_OK"
 
 -- LBS定位
-_G.PRODUCT_KEY = "REDACTED"
+_G.PRODUCT_KEY = "xxx"
